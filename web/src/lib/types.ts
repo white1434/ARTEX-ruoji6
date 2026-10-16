@@ -5,6 +5,7 @@ export type TaskStatus = "created" | "queued" | "running" | "paused" | "done" | 
 export type EngineMode = "exploring" | "paused" | "stalled" | "idle";
 
 export interface Task {
+  distinct_findings?: FindingDistinctStats;
   id: string;
   name?: string; // 可选任务名称;空/缺省=未命名,展示时回退到描述
   category_id?: number;
@@ -489,6 +490,7 @@ export interface FindingAsset {
 }
 
 export interface Finding {
+  case_id?: string;
   traffic_count?: number;
   evidence_version?: number;
   report_evidence_version?: number;
@@ -550,6 +552,7 @@ export interface FindingDeepenResponse {
 
 // FindingStats 是发现全表聚合(统计卡 + 漏洞类型下拉),服务端计算,不受分页影响。
 export interface FindingStats {
+  distinct?: FindingDistinctStats;
   total: number;
   pending: number;
   critical: number;
@@ -710,6 +713,38 @@ export interface AgentTrigger {
   task_create_message: string;
   tool_names: string[]; // on_tool_call 选中的工具 key(至少一个)
   last_fire?: string;
+}
+
+export interface TaskSchedule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  timezone_mode: "beijing" | "system";
+  timezone?: string;
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  end_date?: string;
+  weekdays: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately: boolean;
+  status: "waiting" | "running" | "outside" | "completed" | "error" | "paused";
+  last_window_key?: string;
+  last_transition_at?: string;
+  last_error?: string;
+  next_start?: string;
+  next_end?: string;
+  run_count?: number;
+  last_run_at?: string;
+  task_ids: number[];
+  history?: Array<{
+    id: number;
+    task_id?: number;
+    action: string;
+    success: boolean;
+    message: string;
+    created_at: string;
+  }>;
 }
 
 // ---- Conversations (chat page) ----
@@ -1306,7 +1341,7 @@ export interface AssetInterceptRule {
 }
 
 export interface InterceptPending {
-  decision_source?: "rule" | "model" | "unknown" | "";
+  decision_source?: "rule" | "model" | "manual" | "unknown" | "";
   id: number;
   rule_id?: number;
   conversation_id?: number;
@@ -1326,10 +1361,13 @@ export interface JudgeConfig {
   enabled: boolean;
   profile_id: number; // 0 = 跟随激活/默认配置
   prompt: string; // 判定提示词;GET 未设置时后端回填内置模板全文
-  timeout_seconds: number; // 模型调用超时
+  timeout_seconds: number; // 每次模型审批调用的超时
+  retry_count: number; // 审批失败后的额外重试次数，0 = 不重试
+  retry_interval_ms: number; // 审批重试间隔（毫秒），0 = 立即重试
   fail_action: "allow" | "ask" | "deny"; // 模型出错/超时/不可解析时的回退
   ask_timeout_seconds: number; // 模型判 ask 转人工后的审批等待超时
   ask_timeout_action: "allow" | "deny"; // 审批超时后的默认动作
+  incomplete_script_action: "ask" | "model"; // 脚本快照不完整时：人工审查或继续模型审查
 }
 
 // JudgeUsage: 模型兜底审批(judge 通道)的累计 token 用量 + 近 N 天每日序列。
@@ -1350,7 +1388,10 @@ export interface JudgeUsage {
 
 export interface InterceptApprovalFilter {
   status?: InterceptPending["status"];
-  decision_source?: "rule" | "model" | "unknown";
+  decision_source?: "rule" | "model" | "manual" | "unknown";
+  q?: string;
+  from?: string;
+  to?: string;
 }
 
 // InterceptApprovalRow enriches InterceptPending with conversation/task and rule context.
@@ -1445,6 +1486,17 @@ export interface LLMTask {
 // The exact JSON sent to the review model, retained for all model verdicts.
 export interface InterceptReviewInput {
   version: number;
+  script_capture_status?: "not_applicable" | "complete" | "incomplete";
+  script_files?: {
+    path: string;
+    source?: "file" | "command";
+    sha256?: string;
+    bytes?: number;
+    content?: string;
+    complete?: boolean;
+    truncated?: boolean;
+    read_error?: string;
+  }[];
   background?: {
     // worker_summary is retained only for immutable v2/v3 snapshots.
     source: "user_message" | "worker_summary";
@@ -1609,4 +1661,77 @@ export interface InterceptExecution {
   session: string;
   seq: number;
   items: Activity[];
+}
+
+export interface FindingDistinctStats {
+  total: number;
+  reports: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unassessed: number;
+}
+export interface FindingCase {
+  id: string;
+  task_id: string | null;
+  title: string;
+  reason: string;
+  severity: Severity | "";
+  severity_reason: string;
+  report?: string;
+  version: number;
+  report_version: number;
+  active: boolean;
+  count: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  created_at: string;
+}
+export interface FindingCaseListRow {
+  task_name?: string;
+  task_description?: string;
+  assets?: FindingAsset[];
+  asset_count?: number;
+  last_found_at?: string;
+  case?: FindingCase | null;
+  finding?: Finding;
+  matched_ids: number[];
+}
+export interface FindingCasePage {
+  matching_reports?: number;
+  items: FindingCaseListRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  stats: FindingDistinctStats;
+}
+export interface FindingCaseEvent {
+  id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  finding_ids: number[];
+  created_at: string;
+}
+export interface FindingCaseDetail {
+  case: FindingCase;
+  events: FindingCaseEvent[];
+}
+export interface FindingCaseSuggestion {
+  id: string;
+  task_id: string;
+  left_id: string;
+  right_id: string;
+  title: string;
+  reason: string;
+  state: string;
+}
+export interface FindingCaseReviewRun {
+  conversation_id: number;
+  task_id: string;
+  state: "queued" | "running" | "done" | "failed";
+  error: string;
 }
